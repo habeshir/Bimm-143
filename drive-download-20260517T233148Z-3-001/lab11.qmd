@@ -1,0 +1,224 @@
+---
+title: "Lab_11"
+author: "Hadia Beshir"
+format: pdf
+---
+
+> 5. The EBI AlphaFold database
+
+Querying the AlphaFold database
+
+1. Sequence to search AFDB: PQITLWQRPLVTIKIGGQLKEALLDTGADDTVLEEMSLPGRWKPKMIGGIGGFIKVRQYDQILIEICGHKAIGTVLVGPTPVNIIGRNLLTQIGCTLNF
+2. Examine one of your top hits
+
+Protein Name: Gag-Pol polyprotein
+UniProt ID: P04585
+Organism: Human immunodeficiency virus type 1 (HIV-1)
+
+3. Visit the corresponding AFDB structure page. It shows basic information about the protein (drawn from UniProt), and three separate outputs from AlphaFold.
+
+My model is a dark blue color. This shows that my mdoel is very confident (pLDDT > 90). It also states that the average pLDDT is 96.78 which is considered very high.
+
+After locating the C-terminus of the mdoel in this case was the last letter (F). It had a pLDDT value of 88.81 (Confident). It is still considered high, just not as high as the average. it was a light/teal blue color.
+
+The PAE matrix is all dark green. The C-terminus is highly reliable.
+
+> 6. Generating your own structure positions
+> 7. Interpreting Results
+
+The graph generated is dark orange/red. This shows that the structure has high confidence.
+
+ƒigure 18.
+
+```{r}
+library(imager)
+img <- load.image("Figure 18..png")
+plot(img)
+```
+
+
+> 8. Custom Analysis
+
+```{r}
+results_dir <- "HIV_Protease_Dimer_23119" 
+pdb_files <- list.files(path=results_dir,
+                        pattern="*.pdb",
+                        full.names = TRUE)
+
+# Print our PDB file names
+basename(pdb_files)
+library(bio3d)
+
+pdbs <- pdbaln(pdb_files, fit=TRUE, exefile="msa")
+
+```
+
+```{r}
+pdbs
+```
+
+RMSD is a standard measure of structural distance between coordinate sets. We can use the rmsd() function to calculate the RMSD between all pairs models
+
+```{r}
+rd <- rmsd(pdbs, fit=T)
+range(rd)
+
+```
+
+Draw a heatmap of these RMSD matrix values
+
+```{r}
+library(pheatmap)
+
+colnames(rd) <- paste0("m",1:5)
+rownames(rd) <- paste0("m",1:5)
+pheatmap(rd)
+```
+
+Now lets plot the pLDDT values across all models. Recall that this information is in the B-factor column of each model and that this is stored in our aligned pdbs object as pdbs$b with a row per structure/model.
+
+```{r}
+pdb <- read.pdb("1hsg")
+plotb3(pdbs$b[1,], typ="l", lwd=2, sse=pdb)
+points(pdbs$b[2,], typ="l", col="red")
+points(pdbs$b[3,], typ="l", col="blue")
+points(pdbs$b[4,], typ="l", col="darkgreen")
+points(pdbs$b[5,], typ="l", col="orange")
+abline(v=100, col="gray")
+```
+
+We can improve the superposition/fitting of our models by finding the most consistent “rigid core” common across all the models. For this we will use the core.find() function:
+
+```{r}
+core <- core.find(pdbs)
+core.inds <- print(core, vol=0.5)
+```
+
+```{r}
+xyz <- pdbfit(pdbs, core.inds, outpath="corefit_structures")
+```
+
+Figure 19.
+
+```{r}
+library(imager)
+img2 <- load.image("Figure 19..png")
+plot(img2)
+```
+
+
+Now we can examine the RMSF between positions of the structure. RMSF is an often used measure of conformational variance along the structure:
+
+```{r}
+rf <- rmsf(xyz)
+
+plotb3(rf, sse=pdb)
+abline(v=100, col="gray", ylab="RMSF")
+```
+
+Predicted Alignment Error for domains
+
+```{r}
+library(jsonlite)
+
+# Listing of all PAE JSON files
+pae_files <- list.files(path=results_dir,
+                        pattern=".*model.*\\.json",
+                        full.names = TRUE)
+pae1 <- read_json(pae_files[1],simplifyVector = TRUE)
+pae5 <- read_json(pae_files[5],simplifyVector = TRUE)
+
+attributes(pae1)
+```
+
+```{r}
+# Per-residue pLDDT scores 
+#  same as B-factor of PDB..
+head(pae1$plddt)
+```
+
+The maximum PAE values are useful for ranking models. Here we can see that model 5 is much worse than model 1. The lower the PAE score the better. How about the other models, what are thir max PAE scores?
+
+```{r}
+pae1$max_pae
+pae5$max_pae
+```
+
+We can plot the N by N (where N is the number of residues) PAE scores with ggplot or with functions from the Bio3D package:
+
+```{r}
+plot.dmat(pae1$pae, 
+          xlab="Residue Position (i)",
+          ylab="Residue Position (j)")
+```
+
+```{r}
+plot.dmat(pae5$pae, 
+          xlab="Residue Position (i)",
+          ylab="Residue Position (j)",
+          grid.col = "black",
+          zlim=c(0,30))
+```
+
+Same Z-range:
+
+```{r}
+plot.dmat(pae1$pae, 
+          xlab="Residue Position (i)",
+          ylab="Residue Position (j)",
+          grid.col = "black",
+          zlim=c(0,30))
+```
+
+Residue conservation from alignment file
+
+```{r}
+aln_file <- list.files(path=results_dir,
+                       pattern=".a3m$",
+                        full.names = TRUE)
+aln_file
+```
+
+```{r}
+aln <- read.fasta(aln_file[1], to.upper = TRUE)
+```
+
+How many sequences are in this alignment
+```{r}
+dim(aln$ali)
+
+```
+
+We can score residue conservation in the alignment with the conserv() function
+
+```{r}
+sim <- conserv(aln)
+plotb3(sim[1:99], sse=trim.pdb(pdb, chain="A"),
+       ylab="Conservation Score")
+```
+
+Note the conserved Active Site residues D25, T26, G27, A28. These positions will stand out if we generate a consensus sequence with a high cutoff value:
+
+```{r}
+con <- consensus(aln, cutoff = 0.9)
+con$seq
+```
+
+For a final visualization of these functionally important sites we can map this conservation score to the Occupancy column of a PDB file for viewing in molecular viewer programs such as Mol*, PyMol, VMD, chimera etc.
+
+```{r}
+m1.pdb <- read.pdb(pdb_files[1])
+occ <- vec2resno(c(sim[1:99], sim[1:99]), m1.pdb$atom$resno)
+write.pdb(m1.pdb, o=occ, file="m1_conserv.pdb")
+
+```
+
+Figure 20
+
+```{r}
+img3 <- load.image("Figure 20.png")
+plot(img3)
+```
+
+
+
